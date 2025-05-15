@@ -55,32 +55,35 @@ async def broadcast(message: str, sender: WebSocket = None):
         connected_clients.remove(client)
 
 async def handle_file_transfer(websocket: WebSocket, header: str):
-    """Receive a file in binary frames after a header and notify others."""
-    try:
-        _, file_name, file_size = header.split("|")
-        total_size = int(file_size)
-        received = 0
-        chunks = []
-        # Keep receiving binary frames until we get the full file
-        while received < total_size:
-            frame = await websocket.receive_bytes()
-            chunks.append(frame)
-            received += len(frame)
-        file_data = b"".join(chunks)
+    _, file_name, file_size = header.split("|")
+    total_size = int(file_size)
+    received = 0
+    chunks = []
 
-        # Save received file
-        os.makedirs("received_files", exist_ok=True)
-        path = os.path.join("received_files", file_name)
-        with open(path, "wb") as f:
-            f.write(file_data)
-        print(f"Received file: {file_name} ({received} bytes)")
+    # 1) Read incoming file data
+    while received < total_size:
+        frame = await websocket.receive_bytes()
+        chunks.append(frame)
+        received += len(frame)
+    file_data = b"".join(chunks)
 
-        # Notify other clients that a file was received
-        await broadcast(f"File received: {file_name}", sender=websocket)
-    except Exception as e:
-        print(f"File transfer error: {e}")
-        await broadcast("Error receiving file.", sender=websocket)
+    # 2) Save locally on the server
+    os.makedirs("received_files", exist_ok=True)
+    path = os.path.join("received_files", file_name)
+    with open(path, "wb") as f:
+        f.write(file_data)
+    print(f"Saved file {file_name} ({received} bytes)")
 
+    # 3) Forward to every other client
+    for client in connected_clients:
+        if client is websocket:
+            continue
+
+        # send the same header
+        await client.send_text(header)
+        # then send the binary data in the same chunk sizes
+        for chunk in chunks:
+            await client.send_bytes(chunk)
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5032))
     uvicorn.run(app, host="0.0.0.0", port=port)
